@@ -43,7 +43,13 @@ public class BitLoaderServlet extends DavServlet {
       return;
     try {
       JSONObject jo = new JSONObject(json);
-      String type = jo.getString("type");
+      String type = null;
+      try {
+        type = jo.getString("type");
+      } catch (JSONException e) {
+        
+      }
+      if (type == null)
       
       if (type == null)
         createResource(jo.getString("_type"), jo, req, res);
@@ -54,15 +60,33 @@ public class BitLoaderServlet extends DavServlet {
     }  
   }
   private void createResource(String type, JSONObject jo, DavServletRequest req, DavServletResponse res) throws JSONException {
-    String rType = "http://" + hostAlias.getAliasByHost(ctx.getInitParameter("ServerName")) + type.replace(".", "/");
+    String d = hostAlias.getDirByHostUrl(ctx.getInitParameter("ServerName"));
+    String rType = hostAlias.getAliasByHost(d) + "/voc/dev/" + type.replace(".", "/");
+
     DavClass rCl = DavClass.getDavClass(rType);
     DavResource app = null;
     VocLoader vocLoader = null;
-    if (rCl == null) 
+    if (rCl == null) {
+      int idx = type.lastIndexOf(".");
+      String appPath = type.substring(0, idx);
+      DavRequest dreq = Dav.getDav().list(App.davClass);
+      dreq.setString(App._appPath, appPath);
+      try {
+        app = dreq.execute().getResourceList().get(0);
+      } catch (DavException e) {
+        
+      }
+      try {
+        vocLoader = new VocLoader(true);
+      } catch (Exception e) {
+        
+      }
+
       rCl = getClass(rType, app, vocLoader, req, res);
+    }
     DavRequest rreq = Dav.getDav().mkresource(rCl);
-    JSONObject props = jo.getJSONObject("properties");
-    Iterator<String> it = props.keys();
+
+    Iterator<String> it = jo.keys();
     while (it.hasNext()) {
       String pName = it.next();
       DavProperty dProp = rCl.getProperty(pName);
@@ -75,16 +99,19 @@ public class BitLoaderServlet extends DavServlet {
       }
       boolean isInlined = pCl.isAlwaysInlined();
       if (pCl.isPrimitive()  ||  !isInlined) 
-        WebDavUtils.setValue(rreq, dProp.getUri(), props.getString(pName));
+        WebDavUtils.setValue(rreq, dProp.getUri(), jo.getString(pName));
       else if (isInlined) {
         DavResource ires = new DavResourceSupport();
         DavProperty vProp = pCl.getValueProperty();
         
-        WebDavUtils.setValue(ires, vProp.getUri(), props.get(pName));
+        WebDavUtils.setValue(ires, vProp.getUri(), jo.get(pName));
         if (Money.davClass.isAssignableFrom(pCl)) {
-          String cur = props.getString("currency");
-          if (cur != null)
+          try {
+            String cur = jo.getString("currency");
             ires.setResourceUri(Money._currency, cur);
+          } catch (JSONException e) {
+            
+          }
         }
         rreq.setInlineResource(dProp.getUri(), ires);
       }
@@ -94,8 +121,6 @@ public class BitLoaderServlet extends DavServlet {
     } catch (DavException e) {
       
     }
-  
-    
   }
   private DavClass getClass(String rType, DavResource app, VocLoader vocLoader, DavServletRequest req, DavServletResponse res) {
     DavRequest dreq = Dav.getDav().list(WebClass.davClass);
@@ -289,21 +314,24 @@ public class BitLoaderServlet extends DavServlet {
   }
   
   private DavClass getPropertyType(String range) {
-    if (range.equals("int"))
+    switch (range) {
+    case "int":
       return IntegerProperty.davClass;
-    if (range.equals("boolean"))
+    case "boolean":
       return BooleanProperty.davClass;
-    if (range.equals("date"))
+    case "date":
       return DateProperty.davClass;
-    if (range.equals("float"))
+    case "float":
       return FloatProperty.davClass;
-    if (range.equals("bigdecimal"))
+    case "bigdecimal":
       return DoubleProperty.davClass;
-    if (range.equals("long"))
+    case "long":
       return LongProperty.davClass;
-    if (range.equals("image"))
+    case "image":
       return ImageProperty.davClass;
-    return null;
+    default:
+      return null;
+    }
   }
   private boolean loadWebClass(DavResource app, DavResource webClass, VocLoader loader, DavServletRequest req, DavServletResponse res) {
     try {
