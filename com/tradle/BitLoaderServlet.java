@@ -1,4 +1,4 @@
-package com.fog.webdav.server.apps.tradle;
+package com.tradle;
 
 import hudsonfog.voc.model.company.Money;
 import hudsonfog.voc.model.social.App;
@@ -25,7 +25,7 @@ import com.fogx.webdav.*;
 import com.fogx.webdav.server.*;
 import com.fogx.webdav.util.DavResourceSupport;
 
-public class BitCreateModelOrResourceServlet extends DavServlet {
+public class BitLoaderServlet extends DavServlet {
   HostAlias hostAlias;
   ServletContext ctx;
   
