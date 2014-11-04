@@ -1,8 +1,4 @@
-package com.tradle;
-
-import hudsonfog.voc.model.company.Money;
-import hudsonfog.voc.model.social.App;
-import hudsonfog.voc.system.designer.*;
+package io.tradle;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -24,6 +20,10 @@ import com.fogx.service.HostAlias;
 import com.fogx.webdav.*;
 import com.fogx.webdav.server.*;
 import com.fogx.webdav.util.DavResourceSupport;
+
+import hudsonfog.voc.model.company.Money;
+import hudsonfog.voc.model.social.App;
+import hudsonfog.voc.system.designer.*;
 
 public class BitLoaderServlet extends DavServlet {
   HostAlias hostAlias;
@@ -202,7 +202,7 @@ public class BitLoaderServlet extends DavServlet {
       } catch (JSONException e) {
         
       }
-      // Assume that if no range then it's a string
+      // Assume that if there is no range then it's a string
       DavClass pCl = null;
       String backlink = null;
       String iRange = null;
