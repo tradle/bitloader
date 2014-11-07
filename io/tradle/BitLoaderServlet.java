@@ -1,43 +1,41 @@
 package io.tradle;
 
+import hudsonfog.voc.model.company.Money;
+import hudsonfog.voc.model.social.App;
+import hudsonfog.voc.system.designer.*;
+
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Iterator;
 
+import javax.servlet.Servlet;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
 import javax.servlet.UnavailableException;
 import javax.servlet.http.HttpServletResponse;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import com.fog.rdf.datasource.VocLoader;
-import com.fog.webdav.IncrementalPublishing;
-import com.fog.webdav.WebDavUtils;
-import com.fogx.service.HostAlias;
 import com.fogx.webdav.*;
-import com.fogx.webdav.server.*;
 import com.fogx.webdav.util.DavResourceSupport;
+import com.fogx.webdav.util.UrlUtil;
 
-import hudsonfog.voc.model.company.Money;
-import hudsonfog.voc.model.social.App;
-import hudsonfog.voc.system.designer.*;
-
-public class BitLoaderServlet extends DavServlet {
-  HostAlias hostAlias;
+public class BitLoaderServlet implements Servlet {
   ServletContext ctx;
+  transient ServletConfig config;
   
   public void init(ServletConfig config) throws ServletException, UnavailableException {
-    super.init(config);
-    ctx = getServletContext();
-    hostAlias = (HostAlias)ctx.getAttribute(HostAlias.class.getName() + ".class");
-    if (hostAlias == null)
-      throw new IllegalStateException("service \"" + HostAlias.class.getName() + "\" not found");
-    ctx = getServletContext();
+    this.config = config;
+    ctx = config.getServletContext();
   }
-  public void service(DavServletRequest req, DavServletResponse res) throws ServletException, IOException {
+  /**
+   * Loading transactions from blockchain to the localDB
+   */
+  public void service(ServletRequest req, ServletResponse res) throws ServletException, IOException {
     String json = req.getParameter("json");
     if (json == null)
       return;
@@ -50,8 +48,6 @@ public class BitLoaderServlet extends DavServlet {
         
       }
       if (type == null)
-      
-      if (type == null)
         createResource(jo.getString("_type"), jo, req, res);
       else
         createModel(type, jo, req, res);
@@ -59,30 +55,31 @@ public class BitLoaderServlet extends DavServlet {
       e = e;
     }  
   }
-  private void createResource(String type, JSONObject jo, DavServletRequest req, DavServletResponse res) throws JSONException {
-    String d = hostAlias.getDirByHostUrl(ctx.getInitParameter("ServerName"));
-    String rType = hostAlias.getAliasByHost(d) + "/voc/dev/" + type.replace(".", "/");
+  private String createResource(String type, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException {
+    String serverName = req.getServerName();
+    String typeServerName = serverName.replace("dev.", "");
 
+    String rType = type.startsWith("http://") ? type : "http://" + typeServerName + "/voc/dev/" + type.replace(".", "/");
+    String aUri = null;
+    int idx = type.lastIndexOf(".");
+    String appPath = type.substring(0, idx);
+    DavRequest dreq = Dav.getDav().list(App.davClass);
+    dreq.setString(App._appPath, appPath);
+    try {
+      aUri = dreq.execute().getResourceList().get(0).getUri();
+    } catch (DavException e) {
+      
+    }
+    return createResource(rType, aUri, jo, req, res);
+  }
+  private String createResource(String rType, String aUri, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException {
     DavClass rCl = DavClass.getDavClass(rType);
-    DavResource app = null;
-    VocLoader vocLoader = null;
+    // Check the range of the property is valid. 
     if (rCl == null) {
-      int idx = type.lastIndexOf(".");
-      String appPath = type.substring(0, idx);
-      DavRequest dreq = Dav.getDav().list(App.davClass);
-      dreq.setString(App._appPath, appPath);
-      try {
-        app = dreq.execute().getResourceList().get(0);
-      } catch (DavException e) {
-        
-      }
-      try {
-        vocLoader = new VocLoader(true);
-      } catch (Exception e) {
-        
-      }
-
-      rCl = getClass(rType, app, vocLoader, req, res);
+      publish(aUri, rType, req);
+      rCl = DavClass.getDavClass(rType);
+      if (rCl == null)
+        return null;
     }
     DavRequest rreq = Dav.getDav().mkresource(rCl);
 
@@ -95,16 +92,18 @@ public class BitLoaderServlet extends DavServlet {
       DavClass pCl = dProp.getRange();
       if (pCl == null) {
         String rangeUri = dProp.toResource().getResourceUri(DavProperty._range);
-        pCl = getClass(rangeUri, app, vocLoader, req, res);
+        publish(aUri, rangeUri, req);
+        rCl = DavClass.getDavClass(rangeUri);
+//        pCl = getClass(rangeUri, app, vocLoader, req, res);
       }
       boolean isInlined = pCl.isAlwaysInlined();
-      if (pCl.isPrimitive()  ||  !isInlined) 
-        WebDavUtils.setValue(rreq, dProp.getUri(), jo.getString(pName));
+      if (pCl.isPrimitive())  
+        rreq.setObject(dProp.getUri(), jo.getString(pName));
       else if (isInlined) {
         DavResource ires = new DavResourceSupport();
         DavProperty vProp = pCl.getValueProperty();
         
-        WebDavUtils.setValue(ires, vProp.getUri(), jo.get(pName));
+        ires.setObject(vProp.getUri(), jo.get(pName));
         if (Money.davClass.isAssignableFrom(pCl)) {
           try {
             String cur = jo.getString("currency");
@@ -113,48 +112,41 @@ public class BitLoaderServlet extends DavServlet {
             
           }
         }
+        
         rreq.setInlineResource(dProp.getUri(), ires);
+      }
+      else {
+        JSONObject pjo = jo.getJSONObject(pName);
+        String rUri = createResource(pCl.getUri(), aUri, pjo, req, res);
+        rreq.setResourceUri(dProp.getUri(), rUri);
       }
     }
     try {
-      rreq.execute();
+      return rreq.execute().getHeader("Location");
     } catch (DavException e) {
-      
-    }
-  }
-  private DavClass getClass(String rType, DavResource app, VocLoader vocLoader, DavServletRequest req, DavServletResponse res) {
-    DavRequest dreq = Dav.getDav().list(WebClass.davClass);
-    dreq.setString(WebClass._davClassUri, rType);
-    DavResource webClass = null;
-    try {
-      webClass = dreq.execute().getResourceList().get(0);
-      loadWebClass(app, webClass, vocLoader, req, res);
-      return DavClass.getDavClass(rType);
-    } catch (DavException e) {
-      e = e;
       return null;
     }
-
   }
-  private void createModel(String type, JSONObject jo, DavServletRequest req, DavServletResponse res) throws JSONException, ServletException {
-//    String wcType = "http://" + hostAlias.getAliasByHost(getServletContext().getInitParameter("ServerName")) + type.replace(".", "/");
-//    dreq.setString(WebClass._davClassUri, wcType);
+  private void createModel(String type, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException, ServletException {
     int idx = type.lastIndexOf(".");
     String appPath = type.substring(0, idx);
     int idx0 = appPath.lastIndexOf(".");
     
     DavRequest areq = Dav.getDav().list(App.davClass);
     areq.setString(App._appPath, appPath);
-    String aName = appPath.substring(idx0 + 1);
-    areq.setString(App._name, aName);
+    String aName = appPath; //appPath.substring(idx0 + 1);
     String aUri = null;
     try {
       DavResponse ares = areq.execute();
       aUri = ares.getResourceList().get(0).getUri();
     } catch (DavException e) {
       areq = Dav.getDav().mkresource(App.davClass);
-      areq.setString(App._name, aName);
-      areq.setString(App._title, Character.toUpperCase(aName.charAt(0)) + aName.substring(1));
+      areq.setString(App._title, Character.toUpperCase(aName.charAt(0)) + aName.substring(1).replace(".", " "));
+      String[] a = aName.split("\\.");
+      StringBuilder sb = new StringBuilder();
+      for (String aa: a)
+        sb.append(Character.toUpperCase(aa.charAt(0))).append(aa.substring(1));
+      areq.setString(App._name, sb.toString());
       
       areq.setString(App._appPath, appPath);
       try {
@@ -194,29 +186,17 @@ public class BitLoaderServlet extends DavServlet {
     }
     if (wcUri == null)
       return;
-    DavResource webClass = null;
-    try {
-      webClass = Dav.getDav().propfind(wcUri).execute().getResource();
-    } catch (DavException e) {
-      
-    }
+//    DavResource webClass = null;
+//    try {
+//      webClass = Dav.getDav().propfind(wcUri).execute().getResource();
+//    } catch (DavException e) {
+//      
+//    }
     JSONObject props = jo.getJSONObject("properties");
     Iterator<String> it = props.keys();
-    DavRequest dr = Dav.getDav(ctx.getInitParameter("ServerName")).list(WebClass.davClass);
-    dr.setString(WebClass._davClassUri, Money._rdfType);
+    String serverName = req.getServerName();
+    String typeServerName = serverName.replace("dev.", "");
     String wcMoney = null;
-    try {
-      wcMoney = dr.execute().getResourceList().get(0).getUri();
-    } catch (DavException e) {
-      
-    }
-    VocLoader vocLoader = null;
-    try {
-      vocLoader = new VocLoader(true);
-    } catch (Exception e) {
-      
-    }
-
     HashMap<String, String> h = new HashMap();
     while (it.hasNext()) {
       String propName = it.next();
@@ -225,9 +205,9 @@ public class BitLoaderServlet extends DavServlet {
       try {
         range = annotations.getString("range");
       } catch (JSONException e) {
-        
+        e = e;
       }
-      // Assume that if there is no range then it's a string
+      // Assume that if no range then it's a string
       DavClass pCl = null;
       String backlink = null;
       String iRange = null;
@@ -242,25 +222,30 @@ public class BitLoaderServlet extends DavServlet {
         if (backlink != null) 
           pCl = BacklinkProperty.davClass;
         else if (range.endsWith(".Money")) {
-          if (range != null) {
-            pCl = InlineProperty.davClass;
-            iRange = wcMoney;
-  //          if (currency != null)
-  //            p.setString(InlineProperty._currency, currency);
+          pCl = InlineProperty.davClass;
+          if (wcMoney == null) {
+            DavRequest dr = Dav.getDav(ctx.getInitParameter("IndexServerName")).list(WebClass.davClass);
+            dr.setString(WebClass._davClassUri, Money._rdfType);
+            try {
+              wcMoney = dr.execute().getResourceList().get(0).getUri();
+            } catch (DavException e) {
+              e = e;
+            }
           }
-  
+          iRange = wcMoney;
+//          if (currency != null)
+//            p.setString(InlineProperty._currency, currency);
         }
         else {
           pCl = getPropertyType(range);
           if (pCl == null) { 
             pCl = ResourceProperty.davClass;
-            String d = hostAlias.getDirByHostUrl(ctx.getInitParameter("ServerName"));
-            String rUri = hostAlias.getAliasByHost(d) + "/voc/dev/" + range.replace(".", "/");
+            String rUri = "http://" + typeServerName + "/voc/dev/" + range.replace(".", "/");
             
    
             iRange = h.get(rUri);
             if (iRange == null) {
-              dr = Dav.getDav(ctx.getInitParameter("ServerName")).list(WebClass.davClass);
+              DavRequest dr = Dav.getDav(serverName).list(WebClass.davClass);
               dr.setString(WebClass._davClassUri, rUri);
               try {
                 iRange = dr.execute().getResourceList().get(0).getUri();
@@ -275,11 +260,11 @@ public class BitLoaderServlet extends DavServlet {
         }
       }
       DavRequest preq = Dav.getDav().mkresource(pCl);
+      if (iRange != null)
+        preq.setResourceUri(ResourceProperty._range, iRange);
       preq.setString(pCl.getProperty(WebProperty._name).getUri(), propName);
       preq.setString(pCl.getProperty(WebProperty._label).getUri(), propName.replaceAll("_", " "));
       
-      if (iRange != null)
-        preq.setResourceUri(InlineProperty._range, iRange);
       preq.setResourceUri(pCl.getProperty(WebProperty._domain).getUri(), wcUri);
       Iterator<String> propAnnotations = annotations.keys();
       while (propAnnotations.hasNext()) {
@@ -293,7 +278,7 @@ public class BitLoaderServlet extends DavServlet {
         try {
           aVal = annotations.get(annotation);
         } catch (Exception e) {
-          
+          e = e;
         }
         if (aVal != null) 
           preq.setString(aProp.getUri(), aVal.toString());
@@ -304,43 +289,54 @@ public class BitLoaderServlet extends DavServlet {
         e = e;
       }
     }
-    DavResource app = null;
+    publish(aUri, type, req);
+  }
+  
+
+  private DavClass getPropertyType(String range) {
+    if (range.equals("int"))
+      return IntegerProperty.davClass;
+    if (range.equals("boolean"))
+      return BooleanProperty.davClass;
+    if (range.equals("date"))
+      return DateProperty.davClass;
+    if (range.equals("float"))
+      return FloatProperty.davClass;
+    if (range.equals("bigdecimal"))
+      return DoubleProperty.davClass;
+    if (range.equals("biginteger"))
+        return StringProperty.davClass;
+    if (range.equals("long"))
+      return LongProperty.davClass;
+    if (range.equals("image"))
+      return ImageProperty.davClass;
+    return null;
+  }
+  private DavClass publish(String aUri, String type, ServletRequest req) {
+    String serverName = req.getServerName();
+    String typeServerName = serverName.replace("dev.", "");
+    StringBuilder sb = new StringBuilder();
+    sb.append("http://").append(serverName).append("/proppatch?publish=y&uri=");
+    UrlUtil.encode(aUri, sb);
     try {
-      app = Dav.getDav().propfind(aUri).execute().getResource();
+      Dav.getDav().get(sb.toString()).execute();
     } catch (DavException e) {
       
     }
-    loadWebClass(app, webClass, vocLoader, req, res);
-  }
-  
-  private DavClass getPropertyType(String range) {
-    switch (range) {
-    case "int":
-      return IntegerProperty.davClass;
-    case "boolean":
-      return BooleanProperty.davClass;
-    case "date":
-      return DateProperty.davClass;
-    case "float":
-      return FloatProperty.davClass;
-    case "bigdecimal":
-      return DoubleProperty.davClass;
-    case "long":
-      return LongProperty.davClass;
-    case "image":
-      return ImageProperty.davClass;
-    default:
-      return null;
-    }
-  }
-  private boolean loadWebClass(DavResource app, DavResource webClass, VocLoader loader, DavServletRequest req, DavServletResponse res) {
-    try {
-      IncrementalPublishing ip = new IncrementalPublishing(app, webClass, ctx, loader, req, res);
-      return ip.publishOne();
-    } catch (Exception e) {
-      e = e;
-    }
-    return true;
-   }
+    String wcType = type.startsWith("http://") ? type : "http://" + typeServerName + "/voc/dev/" + type.replace(".", "/");
+    return DavClass.getDavClass(wcType);
 
+  }
+
+  public void destroy() {
+  }
+
+  public ServletConfig getServletConfig() {
+    if (config == null)
+      throw new IllegalStateException("servletConfig is null, make sure you called super.init(servletConfig) in init method of your servlet");
+    return config;
+  }
+  public String getServletInfo() {
+    return "Bit Loader: creates models and resources from chain in Local DB";
+  }
 }
