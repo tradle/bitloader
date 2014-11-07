@@ -32,9 +32,6 @@ public class BitLoaderServlet implements Servlet {
     this.config = config;
     ctx = config.getServletContext();
   }
-  /**
-   * Loading transactions from blockchain to the localDB
-   */
   public void service(ServletRequest req, ServletResponse res) throws ServletException, IOException {
     String json = req.getParameter("json");
     if (json == null)
@@ -55,28 +52,46 @@ public class BitLoaderServlet implements Servlet {
       e = e;
     }  
   }
+  /**
+   * @param type - type of the resource that is being created as it is presented in JSON 'business.coffeeShop.Order'
+   * @param appUri - uri of the application in which resource is created (such as coffeshop, SPA, taxes etc.)
+   * @param jo - JSON object that contains the body of the resource
+   * @param req
+   * @param res
+   * @return     - uri of the created resource
+   * @throws JSONException
+   */
   private String createResource(String type, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException {
     String serverName = req.getServerName();
     String typeServerName = serverName.replace("dev.", "");
 
     String rType = type.startsWith("http://") ? type : "http://" + typeServerName + "/voc/dev/" + type.replace(".", "/");
-    String aUri = null;
+    String appUri = null;
     int idx = type.lastIndexOf(".");
     String appPath = type.substring(0, idx);
     DavRequest dreq = Dav.getDav().list(App.davClass);
     dreq.setString(App._appPath, appPath);
     try {
-      aUri = dreq.execute().getResourceList().get(0).getUri();
+      appUri = dreq.execute().getResourceList().get(0).getUri();
     } catch (DavException e) {
       
     }
-    return createResource(rType, aUri, jo, req, res);
+    return createResource(rType, appUri, jo, req, res);
   }
-  private String createResource(String rType, String aUri, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException {
+  /**
+   * @param type - type of the resource that is being created (like http://tradle.io/voc/dev/business/coffeeShop/Order)
+   * @param appUri - uri of the application in which resource is created (such as coffeshop, SPA, taxes etc.)
+   * @param jo - JSON object that contains the body of the resource
+   * @param req
+   * @param res
+   * @return     - uri of the created resource
+   * @throws JSONException
+   */
+  private String createResource(String rType, String appUri, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException {
     DavClass rCl = DavClass.getDavClass(rType);
     // Check the range of the property is valid. 
     if (rCl == null) {
-      publish(aUri, rType, req);
+      publish(appUri, rType, req);
       rCl = DavClass.getDavClass(rType);
       if (rCl == null)
         return null;
@@ -92,7 +107,7 @@ public class BitLoaderServlet implements Servlet {
       DavClass pCl = dProp.getRange();
       if (pCl == null) {
         String rangeUri = dProp.toResource().getResourceUri(DavProperty._range);
-        publish(aUri, rangeUri, req);
+        publish(appUri, rangeUri, req);
         rCl = DavClass.getDavClass(rangeUri);
 //        pCl = getClass(rangeUri, app, vocLoader, req, res);
       }
@@ -117,7 +132,7 @@ public class BitLoaderServlet implements Servlet {
       }
       else {
         JSONObject pjo = jo.getJSONObject(pName);
-        String rUri = createResource(pCl.getUri(), aUri, pjo, req, res);
+        String rUri = createResource(pCl.getUri(), appUri, pjo, req, res);
         rreq.setResourceUri(dProp.getUri(), rUri);
       }
     }
@@ -127,18 +142,27 @@ public class BitLoaderServlet implements Servlet {
       return null;
     }
   }
+
+  /**
+   * @param type - type of the new model.
+   * @param appUri - uri of the application in which resource is created (such as coffeshop, SPA, taxes etc.)
+   * @param jo - JSON object that contains the body of the model
+   * @param req
+   * @param res
+   * 
+   * @throws JSONException
+   */
   private void createModel(String type, JSONObject jo, ServletRequest req, ServletResponse res) throws JSONException, ServletException {
     int idx = type.lastIndexOf(".");
     String appPath = type.substring(0, idx);
-    int idx0 = appPath.lastIndexOf(".");
     
     DavRequest areq = Dav.getDav().list(App.davClass);
     areq.setString(App._appPath, appPath);
     String aName = appPath; //appPath.substring(idx0 + 1);
-    String aUri = null;
+    String appUri = null;
     try {
       DavResponse ares = areq.execute();
-      aUri = ares.getResourceList().get(0).getUri();
+      appUri = ares.getResourceList().get(0).getUri();
     } catch (DavException e) {
       areq = Dav.getDav().mkresource(App.davClass);
       areq.setString(App._title, Character.toUpperCase(aName.charAt(0)) + aName.substring(1).replace(".", " "));
@@ -150,13 +174,13 @@ public class BitLoaderServlet implements Servlet {
       
       areq.setString(App._appPath, appPath);
       try {
-        aUri = areq.execute().getHeader("Location");
+        appUri = areq.execute().getHeader("Location");
       } catch (DavException ee) {
         return;
       }
     }
     DavRequest dreq = Dav.getDav().mkresource(WebClass.davClass);
-    dreq.setResourceUri(WebClass._parentFolder, aUri);
+    dreq.setResourceUri(WebClass._parentFolder, appUri);
     dreq.setString(WebClass._name, Character.toLowerCase(type.charAt(idx + 1)) + type.substring(idx + 2));
     try {
       String comment = jo.getString("comment");
@@ -289,35 +313,52 @@ public class BitLoaderServlet implements Servlet {
         e = e;
       }
     }
-    publish(aUri, type, req);
+    publish(appUri, type, req);
   }
   
 
+  /**
+   * Maps the range of the property to the internal object that represents this range 
+   * 
+   * @param range - type of the property 
+   * @return - internal object representing this range
+   */
   private DavClass getPropertyType(String range) {
-    if (range.equals("int"))
+    switch (range) {
+    case "int":
       return IntegerProperty.davClass;
-    if (range.equals("boolean"))
+    case "boolean":
       return BooleanProperty.davClass;
-    if (range.equals("date"))
+    case "date":
       return DateProperty.davClass;
-    if (range.equals("float"))
+    case "float":
       return FloatProperty.davClass;
-    if (range.equals("bigdecimal"))
+    case "bigdecimal":
       return DoubleProperty.davClass;
-    if (range.equals("biginteger"))
+    case "biginteger":
         return StringProperty.davClass;
-    if (range.equals("long"))
+    case "long":
       return LongProperty.davClass;
-    if (range.equals("image"))
+    case "image":
       return ImageProperty.davClass;
-    return null;
+    default:
+      return null;
+    }
   }
-  private DavClass publish(String aUri, String type, ServletRequest req) {
+  /**
+   * Verifies the validity of the new type and its properties and creates internal representation of this type
+   * 
+   * @param appUri
+   * @param type
+   * @param req
+   * @return
+   */
+  private DavClass publish(String appUri, String type, ServletRequest req) {
     String serverName = req.getServerName();
     String typeServerName = serverName.replace("dev.", "");
     StringBuilder sb = new StringBuilder();
     sb.append("http://").append(serverName).append("/proppatch?publish=y&uri=");
-    UrlUtil.encode(aUri, sb);
+    UrlUtil.encode(appUri, sb);
     try {
       Dav.getDav().get(sb.toString()).execute();
     } catch (DavException e) {
