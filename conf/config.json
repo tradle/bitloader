@@ -1,0 +1,10 @@
+{
+	"serverName": "dev.tradle.io",
+  "serverAlias": "tradle.io",
+  "indexServerName": "dev.tradle.io/hudsonfog",
+	
+	"loaderAddress" : {
+		"host": "http://127.0.0.1",
+		"port": 8005
+	}
+}
