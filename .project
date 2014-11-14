@@ -18,12 +18,12 @@
 		<link>
 			<name>tmp</name>
 			<type>2</type>
-			<locationURI>PARENT-1-PROJECT_LOC/tmp</locationURI>
+			<locationURI>copy_PARENT/tmp</locationURI>
 		</link>
 	</linkedResources>
 	<filteredResources>
 		<filter>
-			<id>1415081515964</id>
+			<id>0</id>
 			<name>tmp</name>
 			<type>5</type>
 			<matcher>
@@ -33,6 +33,10 @@
 		</filter>
 	</filteredResources>
 	<variableList>
+		<variable>
+			<name>copy_PARENT</name>
+			<value>$%7BPARENT-2-ECLIPSE_HOME%7D/lablz</value>
+		</variable>
 		<variable>
 			<name>tmp</name>
 			<value>file:/tmp</value>
