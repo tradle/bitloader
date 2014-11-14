@@ -513,8 +513,10 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
   }
   
   /**
-   * @param type - type of the new model.
    * @param appUri - uri of the application in which resource is created (such as coffeshop, SPA, taxes etc.)
+   * @param type - type of the backlink model (e.x. models for items of the container).
+   * @param parentType - type of the container model.
+   * @param parentWcUri - uri of the resource that corresponds to the type of the container model.
    * @param jo - JSON object that contains the body of the model
    * @param req
    * 
