@@ -24,8 +24,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import javax.servlet.http.HttpServletResponse;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -48,7 +46,9 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
   private static final Object WEBCLASS_PARENT_FOLDER = "parentFolder";
   private static final Object WEBCLASS_NAME = "name";
   private static final Object WEBCLASS_COMMENT = "comment";
-  private Config config;
+  
+  private static int HTTP_CONFLICT = 409;
+  
   private static String APP_TYPE = "http://www.hudsonfog.com/voc/model/social/App";
   private static String APP_PATH = "appPath";
   private static String APP_NAME = "name";
@@ -72,8 +72,11 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
   HashMap<String, String> rangeToType = new HashMap();
 
   private static String MONEY_TYPE = "http://www.hudsonfog.com/voc/model/company/Money";
+  private static String STRING_CLASS_URI;
 
   private static HashMap<String, JSONObject> propertyTypeToResource = new HashMap(); // map of property type to property metadata
+
+  private Config config;
   
   @Override
   protected void channelRead0(ChannelHandlerContext ctx, HttpRequest req) {
@@ -202,7 +205,7 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
       writer.write(sb.toString());
       writer.flush();
       int code = conn.getResponseCode();
-      if (code == HttpServletResponse.SC_CONFLICT) {
+      if (code == HTTP_CONFLICT) {
         JSONObject jo = getResource(type, params);
         return jo.isNull("_uri") ? null : jo.getString("_uri");
       }
@@ -351,9 +354,13 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
     boolean isPrimitive = jo.isNull("properties");
     String sub = null;
     if (isPrimitive) {
-      JSONObject subJO = getResource(WEBCLASS_TYPE, "$index=y&davClassUri=http://www.hudsonfog.com/voc/system/String");
-      if (subJO != null)
-        sub = subJO.getString("_uri");
+      if (STRING_CLASS_URI == null) {
+        JSONObject subJO = getResource(WEBCLASS_TYPE, "$index=y&davClassUri=http://www.hudsonfog.com/voc/system/String");
+        if (subJO != null) 
+          STRING_CLASS_URI = subJO.getString("_uri");  
+      }
+      sub = STRING_CLASS_URI;
+       
     }  
     StringBuilder sb = new StringBuilder();
     sb.append(WEBCLASS_PARENT_FOLDER).append("=").append(URLEncoder.encode(appUri, "UTF-8") + "&");
@@ -414,7 +421,7 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
             JSONObject rTypeJO = getResource(WEBCLASS_TYPE, "davClassUri=" + rUri); //????
             
             if (rTypeJO == null) { 
-              iRange = createModel(appUri, rUri, annotations, req);
+              iRange = createModelForBacklink(appUri, rUri, type, wcUri, annotations, req);
               if (iRange == null)
                 throw new IllegalStateException("Model " + range + " does not exist");
               h.put(rUri, iRange);
@@ -514,7 +521,12 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
    * @throws JSONException
    * @throws UnsupportedEncodingException 
    */
-  private String createModel(String type, String appUri, JSONObject jo, HttpRequest req) throws JSONException, UnsupportedEncodingException {
+  private String createModelForBacklink(String appUri
+                                      , String type
+                                      , String parentType
+                                      , String parentWcUri
+                                      , JSONObject jo
+                                      , HttpRequest req) throws JSONException, UnsupportedEncodingException {
     int idx = type.lastIndexOf("/");
     StringBuilder sb = new StringBuilder();
     sb.append(WEBCLASS_PARENT_FOLDER).append("=").append(URLEncoder.encode(appUri, "UTF-8") + "&");
@@ -532,129 +544,39 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
       
     }
     String wcUri = mkResource(WEBCLASS_TYPE, sb.toString());
-    if (wcUri == null || isPrimitive)
+    if (wcUri == null)
       return null;
-    JSONObject props = jo.getJSONObject("properties");
-    Iterator<String> it = props.keys();
     
-    String serverName = config.serverName();
-    String typeServerName = config.serverAlias();
-    String wcMoney = null;
-    HashMap<String, String> h = new HashMap();
+    String propName = jo.getString("backLink");
+    String iRange = parentWcUri;
+    String propertyType = RESOURCE_PROPERTY_TYPE;
+    
     sb.setLength(0);
-    while (it.hasNext()) {
-      String propName = it.next();
-      JSONObject annotations = props.getJSONObject(propName);
-      String range = null;
-      try {
-        range = annotations.getString("range");
-      } catch (JSONException e) {
-        e = e;
+    sb.append("range=" + URLEncoder.encode(iRange, "UTF-8") + "&");
+    sb.append("name=" + propName);
+    int length = propName.length();
+    sb.append("&label=");
+    String s = Character.toUpperCase(propName.charAt(0)) + "";
+    for (int i=1; i<length; i++) {
+      char ch = propName.charAt(i);
+      if (ch == '_') {
+        s += " ";
+        continue;
       }
-      // Assume that if no range then it's a string
-      String propertyType = null;
-      String backlink = null;
-      String iRange = null;
-      if (range == null) 
-        propertyType = STRING_PROPERTY_TYPE;
-      else {
-        if (!annotations.isNull("backLink"))
-          backlink = annotations.getString("backLink");
-        if (backlink != null) { 
-          String rUri = "http://" + typeServerName + "/voc/dev/" + range.replace(".", "/");
-          iRange = h.get(rUri);
-          if (iRange == null) {
-            JSONObject rTypeJO = getResource(WEBCLASS_TYPE, "davClassUri=" + rUri); //????
-            
-            if (rTypeJO == null) { 
-              iRange = createModel(appUri, rUri, annotations, req);
-              if (iRange == null)
-                throw new IllegalStateException("Model " + range + " does not exist");
-              h.put(rUri, iRange);
-            }
-          }
-          propertyType = BACKLINK_PROPERTY_TYPE;
-        }
-        else if (range.endsWith(".Money")) {
-          propertyType = INLINE_PROPERTY_TYPE;
-          if (wcMoney == null) {
-            JSONObject moneyJO = getResource(WEBCLASS_TYPE, "davClassUri=" + MONEY_TYPE); //????
-            wcMoney = moneyJO.getString("_uri");
-          }
-          iRange = wcMoney;
-//          if (currency != null)
-//            p.setString(InlineProperty._currency, currency);
-        }
-        else {
-          propertyType = getPropertyType(range);
-          if (propertyType == null) { 
-            String rUri = "http://" + typeServerName + "/voc/dev/" + range.replace(".", "/");
-            iRange = h.get(rUri);
-            if (iRange == null) {
-              JSONObject rTypeJO = getResource(WEBCLASS_TYPE, "davClassUri=" + rUri); //????
-              
-              if (rTypeJO == null) 
-                throw new IllegalStateException("Model " + range + " does not exist");
-              
-              iRange = rTypeJO.getString("_uri");
-              if (rTypeJO.isNull("subClassOf"))
-                propertyType = RESOURCE_PROPERTY_TYPE;
-              else {
-                if (rTypeJO.getString("subClassOfUri").endsWith("String"))
-                  propertyType = STRING_PROPERTY_TYPE;
-                else
-                  propertyType = STRING_PROPERTY_TYPE;
-              }
-
-              h.put(rUri, iRange);
-              rangeToType.put(iRange, propertyType);
-            }
-            else 
-              propertyType = rangeToType.get(iRange);
-          }
-        }
-      }
-      sb.setLength(0);
-      if (iRange != null)
-        sb.append("range=" + URLEncoder.encode(iRange, "UTF-8") + "&");
-      sb.append("name=" + propName);
-      int length = propName.length();
-      sb.append("&label=");
-      String s = "";
-      s += Character.toUpperCase(propName.charAt(0));
-      for (int i=1; i<length; i++) {
-        char ch = propName.charAt(i);
-        if (ch == '_') {
-          s += " ";
-          continue;
-        }
-        if (Character.isUpperCase(ch)) 
-          s += " ";
-        s += ch; 
-      }
-      sb.append(URLEncoder.encode(s));
-      sb.append("&domain=" + URLEncoder.encode(wcUri, "UTF-8"));
-      
-      JSONObject propertyTypeMeta = propertyTypeToResource.get(propertyType);
-      if (propertyTypeMeta == null) { 
-        propertyTypeMeta = getResource(WEBCLASS_TYPE, "davClassUri=" + propertyType);
-        propertyTypeToResource.put(propertyType, propertyTypeMeta);
-      }
-      Iterator<String> propAnnotations = annotations.keys();
-      while (propAnnotations.hasNext()) {
-        String annotation = propAnnotations.next();
-        if (annotation.equals("range")  ||  annotation.equals("domain"))
-          continue;
-        if (propertyTypeMeta.isNull(annotation))
-          continue;
-        Object aVal = null;
-        if (!annotations.isNull(annotation))
-          aVal = annotations.get(annotation);
-        if (aVal != null)
-          sb.append(annotation + "=" + URLEncoder.encode(aVal.toString(), "UTF-8"));
-      }
-      mkResource(propertyType, sb.toString());
+      if (Character.isUpperCase(ch)) 
+        s += " ";
+      s += ch; 
     }
+    sb.append(URLEncoder.encode(s));
+    sb.append("&domain=" + URLEncoder.encode(wcUri, "UTF-8"));
+    
+    JSONObject propertyTypeMeta = propertyTypeToResource.get(propertyType);
+    if (propertyTypeMeta == null) { 
+      propertyTypeMeta = getResource(WEBCLASS_TYPE, "davClassUri=" + propertyType);
+      propertyTypeToResource.put(propertyType, propertyTypeMeta);
+    }
+    mkResource(propertyType, sb.toString());
+  
     return wcUri;
   }
 
