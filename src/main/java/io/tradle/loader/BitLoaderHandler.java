@@ -472,6 +472,9 @@ public class BitLoaderHandler extends SimpleChannelInboundHandler<HttpRequest> {
       if (iRange != null)
         sb.append("range=" + URLEncoder.encode(iRange, "UTF-8") + "&");
       sb.append("name=" + propName);
+      if (backlink != null)
+        sb.append("&backLink=" + backlink);
+        
       int length = propName.length();
       sb.append("&label=");
       String s = "";
